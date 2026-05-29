@@ -68,6 +68,17 @@ ClaudePnP automates both decisions:
 | `<stem>_feeders.csv` | Final feeder assignment — one row per assigned reel, with slot number, physical position, and component details. Handed to the machine operator. |
 | `<stem>_sequence.txt` | Machine job file — one line per placement, space-separated, ordered into optimised pick sequences. |
 
+When `--machines N` is used with N > 1, the feeder and sequence files are suffixed with the machine number instead:
+
+| File | Purpose |
+|---|---|
+| `<stem>_machine1_feeders.csv` | Feeder assignment for machine 1 |
+| `<stem>_machine1_sequence.txt` | Job sequence for machine 1 |
+| `<stem>_machine2_feeders.csv` | Feeder assignment for machine 2 |
+| `<stem>_machine2_sequence.txt` | Job sequence for machine 2 |
+
+The `_components.csv` file is always a single shared file regardless of the number of machines.
+
 ---
 
 ## Input BOM Format
@@ -115,9 +126,12 @@ Phase 1 — Enrich
 
 Phase 2 — Optimise
   Read <stem>_components.csv → merge into placements
-  Assign feeder slots (centre-out, mod-3 aligned)
-  Build pick sequences (nearest-neighbour PCB tour)
-  Write <stem>_feeders.csv and <stem>_sequence.txt
+  If --machines N:
+    Split component types across N machines (greedy, by placement count)
+  For each machine:
+    Assign feeder slots (centre-out, mod-3 aligned)
+    Build pick sequences (nearest-neighbour PCB tour)
+    Write <stem>[_machineN]_feeders.csv and <stem>[_machineN]_sequence.txt
 ```
 
 The component file is always (re-)written in Phase 1. If it already exists,
@@ -214,6 +228,7 @@ python3 claudepnp.py --bom <file> [options]
 | `--multi-reel` | `-m` | off | Suggest duplicate reels for high-volume components |
 | `--multi-reel-threshold` | `-t` | `20` | Placements per reel before a second reel is added |
 | `--include-dnm` | | off | Include DNM/DNP components instead of skipping them |
+| `--machines` | | `1` | Split the job across N machines, each with its own feeder CSV and sequence file |
 
 ---
 
@@ -295,6 +310,40 @@ Any component with 15 or more placements gets a second reel. Components with
 30 or more get a third, up to a maximum of 4 reels (one per nozzle that can
 fire simultaneously). The duplicate reels are placed in the same mod-3
 alignment group so simultaneous picking applies.
+
+---
+
+### Splitting work across two machines
+
+When board volume is high enough that cycle time matters more than setup time,
+splitting the job across two machines runs both in parallel and roughly halves
+the time to complete a panel:
+
+```bash
+python3 claudepnp.py --bom nr52-top.txt --machines 2
+```
+
+Component types are distributed greedily by placement count — the largest
+types are assigned first, each going to the machine with the fewest total
+placements so far. This produces an approximately even split. The two machines
+each get an independent feeder bank layout and sequence file:
+
+```
+Outputs written:
+  nr52-top_components.csv
+  nr52-top_machine1_feeders.csv
+  nr52-top_machine1_sequence.txt
+  nr52-top_machine2_feeders.csv
+  nr52-top_machine2_sequence.txt
+```
+
+For short runs where feeder setup time dominates, use the default (`--machines
+1`). Setting up a single machine takes less than half the time of setting up
+two machines, so the break-even point depends on board quantity and placement
+count.
+
+`--machines` can be combined with `--multi-reel`. Each machine's reels are
+assigned independently within its own 70-slot feeder bank.
 
 ---
 

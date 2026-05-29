@@ -21,6 +21,11 @@ Usage:
   --multi-reel-threshold N
                         Minimum placement count to trigger an extra reel
                         (default: 20).
+  --machines N          Split the job across N machines (default: 1).
+                        Each machine gets its own feeder CSV and sequence file
+                        (<prefix>_machine1_*, <prefix>_machine2_*, ...).
+                        Components are distributed greedily by placement count
+                        to balance total work per machine.
 """
 
 import argparse
@@ -605,6 +610,30 @@ def group_components(placements: list[Placement]) -> list[ComponentType]:
     return list(groups.values())
 
 
+def split_components_across_machines(
+    components: list[ComponentType],
+    n_machines: int,
+) -> list[list[ComponentType]]:
+    """
+    Distribute component types across n_machines using greedy load-balancing.
+    Components are sorted largest-first and assigned to the machine with the
+    fewest total placements so far, producing an approximately even split.
+    """
+    if n_machines == 1:
+        return [components]
+
+    sorted_comps = sorted(components, key=lambda c: -c.count)
+    buckets: list[list[ComponentType]] = [[] for _ in range(n_machines)]
+    totals:  list[int]                 = [0]  * n_machines
+
+    for comp in sorted_comps:
+        min_idx = totals.index(min(totals))
+        buckets[min_idx].append(comp)
+        totals[min_idx] += comp.count
+
+    return buckets
+
+
 # ─── Feeder slot assignment ────────────────────────────────────────────────────
 
 def assign_slots(
@@ -987,6 +1016,8 @@ def main() -> None:
                         help='Placements per reel threshold (default: 20)')
     parser.add_argument('--include-dnm', action='store_true',
                         help='Include DNM/DNP components instead of skipping them')
+    parser.add_argument('--machines', type=int, default=1, metavar='N',
+                        help='Split job across N machines (default: 1)')
     args = parser.parse_args()
 
     bom_path          = Path(args.bom)
@@ -1078,7 +1109,9 @@ def main() -> None:
     # PHASE 2 — Merge component config into placements, assign slots, build
     #           sequences, write outputs
     # ═════════════════════════════════════════════════════════════════════════
-    print(f"\nPhase 2 — Slot assignment and sequence generation")
+    n_machines = args.machines
+    print(f"\nPhase 2 — Slot assignment and sequence generation"
+          + (f" ({n_machines} machines)" if n_machines > 1 else ""))
 
     # Merge feeder info from the component table back into each placement
     configs = load_components_csv(components_path)
@@ -1095,35 +1128,49 @@ def main() -> None:
     # Re-group with feeder info now populated
     components = group_components(placements)
 
-    print("\nSlot capacity:")
-    capacity_report(components, feeder_specs)
+    # Distribute component types across machines
+    partitions = split_components_across_machines(components, n_machines)
 
-    print("\nAssigning feeder slots...")
-    assignments = assign_slots(
-        components,
-        feeder_specs,
-        multi_reel=args.multi_reel,
-        multi_reel_threshold=args.multi_reel_threshold,
-    )
-    print(f"  {len(assignments)} feeder reels assigned")
-    if args.multi_reel:
-        print(f"  Multi-reel ON (threshold: {args.multi_reel_threshold} placements/reel)")
+    output_files: list[Path] = [components_path]
 
-    print("\nBuilding pick sequences...")
-    sequences = build_sequences(placements)
-    print_summary(sequences)
+    for machine_idx, machine_components in enumerate(partitions, start=1):
+        machine_label = f"_machine{machine_idx}" if n_machines > 1 else ""
+        machine_placements = [p for c in machine_components for p in c.placements]
 
-    # ── Write outputs ─────────────────────────────────────────────────────────
-    feeder_csv = output_dir / f"{job_prefix}_feeders.csv"
-    job_txt    = output_dir / f"{job_prefix}_sequence.txt"
+        if n_machines > 1:
+            total_p = sum(c.count for c in machine_components)
+            print(f"\n── Machine {machine_idx}  ({total_p} placements,"
+                  f" {len(machine_components)} component types) ──")
 
-    write_feeder_csv(assignments, feeder_csv)
-    write_job_file(sequences, job_txt)
+        print("\nSlot capacity:")
+        capacity_report(machine_components, feeder_specs)
+
+        print("\nAssigning feeder slots...")
+        assignments = assign_slots(
+            machine_components,
+            feeder_specs,
+            multi_reel=args.multi_reel,
+            multi_reel_threshold=args.multi_reel_threshold,
+        )
+        print(f"  {len(assignments)} feeder reels assigned")
+        if args.multi_reel:
+            print(f"  Multi-reel ON (threshold: {args.multi_reel_threshold} placements/reel)")
+
+        print("\nBuilding pick sequences...")
+        sequences = build_sequences(machine_placements)
+        print_summary(sequences)
+
+        feeder_csv = output_dir / f"{job_prefix}{machine_label}_feeders.csv"
+        job_txt    = output_dir / f"{job_prefix}{machine_label}_sequence.txt"
+
+        write_feeder_csv(assignments, feeder_csv)
+        write_job_file(sequences, job_txt)
+
+        output_files.extend([feeder_csv, job_txt])
 
     print(f"\nOutputs written:")
-    print(f"  {components_path}")
-    print(f"  {feeder_csv}")
-    print(f"  {job_txt}")
+    for out_path in output_files:
+        print(f"  {out_path}")
 
 
 if __name__ == '__main__':
