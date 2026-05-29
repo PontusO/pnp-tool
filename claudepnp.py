@@ -244,37 +244,79 @@ def load_feeder_table(path: Path) -> dict[int, FeederSpec]:
     return specs
 
 
+def _detect_csv_delimiter(path: Path) -> str:
+    """
+    Detect whether a CSV file uses comma or semicolon as its field delimiter
+    by inspecting the first non-empty line (the header).
+
+    Semicolons are common in European-locale Excel exports where the comma is
+    reserved as the decimal separator.
+    """
+    with open(path, encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                return ';' if line.count(';') > line.count(',') else ','
+    return ','
+
+
+def _clean_field(value: str) -> str:
+    """
+    Sanitize a free-text field (value, MPN/name) so it is safe for the
+    pick and place machine job file parser.
+
+    Two-pass approach:
+      1. Convert European decimal commas (digit,digit) to decimal points
+         so that 4,7uF becomes 4.7uF rather than 4_7uF.
+      2. Replace any remaining commas and semicolons with underscores —
+         these include commas in part numbers (74AVC4TD245BQ,115) and any
+         stray semicolons from locale-specific exports.
+
+    Examples:
+      4,7uF              → 4.7uF
+      0,1uF              → 0.1uF
+      74AVC4TD245BQ,115  → 74AVC4TD245BQ_115
+      some;value         → some_value
+    """
+    import re
+    # Pass 1: decimal commas → decimal points
+    value = re.sub(r'(\d),(\d)', r'\1.\2', value)
+    # Pass 2: any remaining commas or semicolons → underscore
+    value = value.replace(',', '_').replace(';', '_')
+    return value
+
+
 def load_bom(path: Path, include_dnm: bool = False) -> list[Placement]:
     """
     Load a BOM file and return a list of Placement objects.
 
     File format is inferred from the extension:
-      .csv  → comma-separated
+      .csv  → comma- or semicolon-separated (delimiter auto-detected)
       .txt  → whitespace-separated (any run of spaces/tabs)
 
-    Column names are normalised via _COL_ALIASES so both the original CSV
+    Column names are normalised via _COL_ALIASES so both the canonical CSV
     format (refdes, value, X, Y, A, package, …) and the space-separated
     export format (Designator, Value, PosX, PosY, Angle, Package, …) are
     accepted transparently.
 
-    Optional columns (feeder_width, feeder_row, nozzle_type, name) default
-    to sensible values when absent and a warning is printed once per file.
+    European decimal commas in value fields (e.g. 4,7uF) are converted to
+    decimal points (4.7uF) during loading so they never reach any output file.
+
+    Optional columns (feeder_width, feeder_row, nozzle_type, name) are left
+    as None when absent; the package-rules / component-CSV phase fills them in.
     """
     suffix = path.suffix.lower()
 
     placements: list[Placement] = []
-    warned_defaults: set[str] = set()
     skipped_dnm: list[str] = []
 
     with open(path, newline='', encoding='utf-8') as f:
         if suffix == '.csv':
-            reader = csv.DictReader(f)
+            delimiter = _detect_csv_delimiter(path)
+            reader = csv.DictReader(f, delimiter=delimiter)
             rows = list(reader)
         else:
             # Space/tab-separated: split each line on any whitespace run.
-            # Re-use csv.DictReader with a sentinel delimiter that never
-            # appears, then split the single "field" ourselves — simpler to
-            # just read lines directly.
             lines = [ln.rstrip('\n') for ln in f if ln.strip()]
             if not lines:
                 return []
@@ -291,10 +333,10 @@ def load_bom(path: Path, include_dnm: bool = False) -> list[Placement]:
         # ── Required fields ──────────────────────────────────────────────
         try:
             refdes  = row['refdes'].strip()
-            value   = row['value'].strip()
-            x       = float(row['X'])
-            y       = float(row['Y'])
-            angle   = float(row['A'])
+            value   = _clean_field(row['value'].strip())
+            x       = float(row['X'].replace(',', '.'))
+            y       = float(row['Y'].replace(',', '.'))
+            angle   = float(row['A'].replace(',', '.'))
             package = row['package'].strip()
         except (KeyError, ValueError) as e:
             print(f"WARNING: BOM line {lineno} skipped — {e}", file=sys.stderr)
@@ -318,7 +360,7 @@ def load_bom(path: Path, include_dnm: bool = False) -> list[Placement]:
         feeder_row: Optional[str] = raw_fr if raw_fr in ('FRONT', 'REAR') else None
 
         nozzle_type = row.get('nozzle_type', '').strip()
-        name        = row.get('name', '').strip()
+        name        = _clean_field(row.get('name', '').strip())
 
         placements.append(Placement(
             refdes       = refdes,
@@ -499,7 +541,7 @@ def load_components_csv(path: Path) -> dict[tuple, dict]:
                 'feeder_width': int(row['feeder_width']) if row['feeder_width'].strip() else None,
                 'feeder_row':   row['feeder_row'].strip().upper() or None,
                 'nozzle_type':  row.get('nozzle_type', '').strip(),
-                'name':         row.get('name', '').strip(),
+                'name':         _clean_field(row.get('name', '').strip()),
                 'matched_by':   row.get('matched_by', '').strip(),
             }
     return configs
