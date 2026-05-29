@@ -618,51 +618,44 @@ def assign_slots(
 
     Strategy
     --------
-    1. Sort by placement count descending (most-used → earliest assignment).
-    2. Search in centre-out order (highest-volume parts land nearest the rack
-       centre = shortest head travel to the PCB work area).
-    3. Within the centre-out search, prefer mod-group-0 slots so that
-       simultaneous picking (slots spaced NOZZLE_PITCH_SLOTS apart) is
-       maximised.  Falls back to any free slot if the preferred group is full.
-    4. With --multi-reel, extra reels of the same component are placed in the
-       same mod group (next available centre-out slot at the same modulo).
+    1. Sort by placement count descending within each row (most-used →
+       earliest assignment, landing nearest the rack centre).
+    2. Search in centre-out order; prefer mod-group-0 slots for simultaneous
+       picking, falling back to any free slot in the same row.
+    3. If a component's preferred row is full, it is automatically moved to
+       the other row rather than skipped.  A summary of all such moves is
+       printed after assignment.  The component's feeder_row and all its
+       placements are updated to reflect the actual row assigned.
+    4. With --multi-reel, extra reels are placed in the same mod group.
     5. Placements are distributed round-robin across reels.
     """
-    assignments: list[FeederAssignment] = []
+    # Single occupancy map covering all 70 slots
+    slot_free: dict[int, bool] = {s: True for s in range(1, REAR_SLOT_LAST + 1)}
 
-    for row in ('FRONT', 'REAR'):
-        row_components = [c for c in components if c.feeder_row == row]
-        row_components.sort(key=lambda c: -c.count)
-
-        # Build a slot occupancy map: slot_number → bool
+    def _find_free_run_in_row(
+        row: str,
+        slots_needed: int,
+        preferred_mod: Optional[int] = None,
+    ) -> Optional[int]:
         valid = _row_valid_slots(row)
-        slot_free: dict[int, bool] = {s: True for s in valid}
+        for start in _center_out_order(row):
+            if preferred_mod is not None and _slot_mod_group(start) != preferred_mod:
+                continue
+            run = list(range(start, start + slots_needed))
+            if all(s in valid and slot_free.get(s, False) for s in run):
+                return start
+        return None
 
-        def _find_free_run(slots_needed: int, preferred_mod: Optional[int] = None) -> Optional[int]:
-            """
-            Search in centre-out order for the first starting slot where
-            `slots_needed` physically consecutive slot numbers are all free.
+    def _occupy(start_slot: int, slots_needed: int) -> None:
+        for s in range(start_slot, start_slot + slots_needed):
+            slot_free[s] = False
 
-            Physically consecutive means slot n, n+1, …, n+slots_needed-1 all
-            belong to this row and are unoccupied.  This is correct for both
-            rows: front slots increase left→right, rear slots increase
-            right→left, but in both cases adjacent slot numbers are adjacent
-            on the rail.
+    assignments:    list[FeederAssignment]              = []
+    overflow_moves: list[tuple[ComponentType, str, str]] = []  # (comp, from, to)
 
-            If preferred_mod is given, only starting slots in that mod group
-            are considered; call again with preferred_mod=None as a fallback.
-            """
-            for start in _center_out_order(row):
-                if preferred_mod is not None and _slot_mod_group(start) != preferred_mod:
-                    continue
-                run = list(range(start, start + slots_needed))
-                if all(s in valid and slot_free.get(s, False) for s in run):
-                    return start
-            return None
-
-        def _occupy(start_slot: int, slots_needed: int):
-            for s in range(start_slot, start_slot + slots_needed):
-                slot_free[s] = False
+    for preferred_row in ('FRONT', 'REAR'):
+        row_components = [c for c in components if c.feeder_row == preferred_row]
+        row_components.sort(key=lambda c: -c.count)
 
         for comp in row_components:
             spec = feeder_specs.get(comp.feeder_width)
@@ -676,29 +669,38 @@ def assign_slots(
 
             slots_needed = spec.slots_consumed
 
-            # How many reels to allocate?
             num_reels = 1
             if multi_reel and comp.count >= multi_reel_threshold:
-                extra = comp.count // multi_reel_threshold
-                num_reels = min(MAX_SIMULTANEOUS, 1 + extra)
+                num_reels = min(MAX_SIMULTANEOUS, 1 + comp.count // multi_reel_threshold)
 
-            # Assign reels — try to keep them in the same mod group so that
-            # simultaneous picking is possible.
             reel_start_slots: list[int] = []
-            preferred_mod = 0  # start with group 0 (slots 1,4,7,… front / 70,67,… rear)
+            actual_row = preferred_row
 
             for reel_idx in range(num_reels):
-                # Try preferred mod group first, fall back to any free slot.
-                start = _find_free_run(slots_needed, preferred_mod=preferred_mod)
+                # Try preferred row (mod-aligned, then any free slot)
+                start = _find_free_run_in_row(actual_row, slots_needed, preferred_mod=0)
                 if start is None:
-                    start = _find_free_run(slots_needed, preferred_mod=None)
+                    start = _find_free_run_in_row(actual_row, slots_needed)
+
+                # Preferred row full — fall back to the other row
+                if start is None:
+                    other_row = 'REAR' if actual_row == 'FRONT' else 'FRONT'
+                    start = _find_free_run_in_row(other_row, slots_needed, preferred_mod=0)
+                    if start is None:
+                        start = _find_free_run_in_row(other_row, slots_needed)
+                    if start is not None:
+                        if reel_idx == 0:
+                            overflow_moves.append((comp, preferred_row, other_row))
+                        actual_row = other_row
+
                 if start is None:
                     print(
-                        f"WARNING: No free slots for {comp.value} reel {reel_idx} "
-                        f"in {row} row",
+                        f"ERROR: No free slots for {comp.value} ({comp.package}) "
+                        f"in either row — component will be unplaced.",
                         file=sys.stderr,
                     )
                     break
+
                 _occupy(start, slots_needed)
                 reel_start_slots.append(start)
                 assignments.append(FeederAssignment(
@@ -711,11 +713,24 @@ def assign_slots(
             if not reel_start_slots:
                 continue
 
+            # If the component ended up in a different row, update it and
+            # all its placements so sequences are built correctly.
+            if actual_row != preferred_row:
+                comp.feeder_row = actual_row
+                for p in comp.placements:
+                    p.feeder_row = actual_row
+
             # Distribute placements round-robin across reels
             for i, placement in enumerate(comp.placements):
-                reel_i = i % len(reel_start_slots)
-                placement.feeder_slot = reel_start_slots[reel_i]
-                placement.reel_index  = reel_i
+                placement.feeder_slot = reel_start_slots[i % len(reel_start_slots)]
+                placement.reel_index  = i % len(reel_start_slots)
+
+    if overflow_moves:
+        print(f"\n  NOTE: {len(overflow_moves)} component(s) moved to alternate row"
+              f" due to FRONT overflow:")
+        for comp, from_row, to_row in overflow_moves:
+            print(f"    {comp.value:<20} {comp.package:<30} {from_row} → {to_row}")
+        print(f"  Consider splitting the job across two machines for optimal cycle time.")
 
     return assignments
 
