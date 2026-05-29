@@ -1,0 +1,8 @@
+width_mm,slots_consumed,description
+8,1,Standard 8mm tape feeder
+12,2,12mm tape feeder
+16,2,16mm tape feeder
+24,3,24mm tape feeder
+32,4,32mm tape feeder
+44,6,44mm tape feeder
+56,7,56mm tape feeder
