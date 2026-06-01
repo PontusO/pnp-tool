@@ -66,6 +66,53 @@ REAR_SLOTS  = set(range(REAR_SLOT_FIRST,  REAR_SLOT_LAST  + 1))
 FRONT_CENTER: float = 19.5
 REAR_CENTER:  float = 51.5
 
+# Physical machine centre in mm (both rows share the same X axis centre).
+# Used for placement-time interpolation: components closer to the centre are
+# faster to pick and place than those at the rack edges.
+MACHINE_CENTER_MM:    float = 148.0   # physical_x of the centre slot
+MAX_RACK_DISTANCE_MM: float = 148.0   # max physical distance from centre to any slot edge
+
+# ─── Timing configuration ─────────────────────────────────────────────────────
+
+@dataclass
+class TimingConfig:
+    """Per-machine placement-time calibration (seconds per component)."""
+    front_time_min: float = 0.5   # fastest front placement (feeder at centre)
+    front_time_max: float = 0.7   # slowest front placement (feeder at edge)
+    rear_time_min:  float = 1.0   # fastest rear placement
+    rear_time_max:  float = 1.2   # slowest rear placement
+
+
+def load_timing_config(path: Path) -> TimingConfig:
+    """
+    Load timing calibration from a CSV with columns: parameter, value, description.
+    Missing or unrecognised parameters retain their defaults.
+    """
+    cfg = TimingConfig()
+    if not path.exists():
+        return cfg
+    with open(path, newline='', encoding='utf-8') as f:
+        for row in csv.DictReader(f):
+            param = row.get('parameter', '').strip()
+            raw   = row.get('value', '').strip()
+            if not param or not raw:
+                continue
+            try:
+                val = float(raw)
+            except ValueError:
+                print(f"WARNING: timing_config: invalid value for '{param}': {raw!r}",
+                      file=sys.stderr)
+                continue
+            if   param == 'front_time_min': cfg.front_time_min = val
+            elif param == 'front_time_max': cfg.front_time_max = val
+            elif param == 'rear_time_min':  cfg.rear_time_min  = val
+            elif param == 'rear_time_max':  cfg.rear_time_max  = val
+            else:
+                print(f"WARNING: timing_config: unknown parameter '{param}' ignored",
+                      file=sys.stderr)
+    return cfg
+
+
 # ─── Data classes ─────────────────────────────────────────────────────────────
 
 @dataclass
@@ -186,6 +233,21 @@ def _center_out_order(row: str) -> list[int]:
         center = REAR_CENTER
     # Sort by distance from centre; for equal distance prefer the lower slot number
     return sorted(slots, key=lambda s: (abs(s - center), s))
+
+
+def _placement_time(slot: int, timing: TimingConfig) -> float:
+    """
+    Estimate seconds to pick and place one component from the given feeder slot.
+    Interpolates linearly between the calibrated min/max bounds based on physical
+    distance from the machine centre (148 mm).  Slots closest to the centre are
+    fastest.
+    """
+    dist_frac = min(1.0, abs(_slot_physical_x(slot) - MACHINE_CENTER_MM)
+                         / MAX_RACK_DISTANCE_MM)
+    if slot in FRONT_SLOTS:
+        return timing.front_time_min + dist_frac * (timing.front_time_max - timing.front_time_min)
+    else:
+        return timing.rear_time_min  + dist_frac * (timing.rear_time_max  - timing.rear_time_min)
 
 
 # ─── Loaders ──────────────────────────────────────────────────────────────────
@@ -500,7 +562,7 @@ _COMP_CSV_FIELDS = [
     'matched_by', 'status',
 ]
 
-_REQUIRED_COMP_FIELDS = ('feeder_width', 'feeder_row')
+_REQUIRED_COMP_FIELDS = ('feeder_width', 'feeder_row', 'nozzle_type')
 
 
 def _component_status(comp: 'ComponentType') -> str:
@@ -583,6 +645,41 @@ def incomplete_configs(configs: dict[tuple, dict]) -> list[tuple]:
     ]
 
 
+def update_package_rules_from_manual(
+    components:     list['ComponentType'],
+    rules:          list['PackageRule'],
+    pkg_rules_path: Path,
+) -> int:
+    """
+    For each component marked MANUAL with all required fields set, check whether
+    its package is already covered by an existing rule.  If not, append a new
+    exact rule to package_rules.csv so the next run resolves it automatically.
+    Returns the number of new rules written.
+    """
+    new_lines: list[str] = []
+    for comp in components:
+        if comp.matched_by != 'MANUAL':
+            continue
+        if _component_status(comp) != 'OK':
+            continue
+        if any(_match_rule(comp.package, r) for r in rules):
+            continue
+        fw = str(comp.feeder_width) if comp.feeder_width else ''
+        fr = comp.feeder_row or ''
+        nt = comp.nozzle_type or ''
+        new_lines.append(f"{comp.package},exact,{fw},{fr},{nt},auto-learned")
+
+    if new_lines:
+        existing = pkg_rules_path.read_text(encoding='utf-8')
+        with open(pkg_rules_path, 'a', encoding='utf-8') as f:
+            if '# Auto-learned' not in existing:
+                f.write('#\n# Auto-learned from manual component entries\n')
+            for line in new_lines:
+                f.write(line + '\n')
+
+    return len(new_lines)
+
+
 # ─── Component grouping ───────────────────────────────────────────────────────
 
 def _component_key(p: Placement) -> tuple:
@@ -610,26 +707,58 @@ def group_components(placements: list[Placement]) -> list[ComponentType]:
     return list(groups.values())
 
 
+_SMALL_NOZZLES = frozenset({'#500', '#501', '#502', '#503'})
+
+
 def split_components_across_machines(
-    components: list[ComponentType],
-    n_machines: int,
+    components:    list[ComponentType],
+    n_machines:    int,
+    machine1_skew: float = 0.0,
 ) -> list[list[ComponentType]]:
     """
-    Distribute component types across n_machines using greedy load-balancing.
-    Components are sorted largest-first and assigned to the machine with the
-    fewest total placements so far, producing an approximately even split.
+    Distribute component types across n_machines using a two-pass nozzle-aware
+    greedy algorithm.
+
+    Pass 1 — small-nozzle (#500–#503, passives): assigned to machine 1 first,
+    up to its budget of (fair_share × (1 + machine1_skew/100)) placements.
+    Overflow spills to whichever machine has the lowest running total.
+
+    Pass 2 — large-nozzle (#504+, ICs/modules): assigned greedy with tie-
+    breaking that prefers higher-indexed machines, so machine 1 fills last.
+
+    machine1_skew=0 (default) produces an approximately equal split; positive
+    values let machine 1 carry proportionally more work (useful when large
+    components on machine 2 take longer per placement due to precision camera).
     """
     if n_machines == 1:
         return [components]
 
-    sorted_comps = sorted(components, key=lambda c: -c.count)
+    total      = sum(c.count for c in components)
+    fair_share = total / n_machines
+    m1_budget  = fair_share * (1 + machine1_skew / 100)
+
+    group_s = sorted([c for c in components if c.nozzle_type in _SMALL_NOZZLES],
+                     key=lambda c: -c.count)
+    group_l = sorted([c for c in components if c.nozzle_type not in _SMALL_NOZZLES],
+                     key=lambda c: -c.count)
+
     buckets: list[list[ComponentType]] = [[] for _ in range(n_machines)]
     totals:  list[int]                 = [0]  * n_machines
 
-    for comp in sorted_comps:
-        min_idx = totals.index(min(totals))
-        buckets[min_idx].append(comp)
-        totals[min_idx] += comp.count
+    # Pass 1: small-nozzle — prefer machine 1 up to its budget
+    for comp in group_s:
+        if totals[0] + comp.count <= m1_budget:
+            idx = 0
+        else:
+            idx = min(range(n_machines), key=lambda i: (totals[i], i))
+        buckets[idx].append(comp)
+        totals[idx] += comp.count
+
+    # Pass 2: large-nozzle — prefer machines 2+ (machine 1 fills last)
+    for comp in group_l:
+        idx = min(range(n_machines), key=lambda i: (totals[i], -i))
+        buckets[idx].append(comp)
+        totals[idx] += comp.count
 
     return buckets
 
@@ -806,69 +935,263 @@ def _nearest_neighbor_tour(placements: list[Placement]) -> list[Placement]:
     return tour
 
 
-def build_sequences(placements: list[Placement]) -> list[list[Placement]]:
+def _bundle_rear_into_front(
+    front_seqs:  list[list[Placement]],
+    rear_seqs:   list[list[Placement]],
+    head_config: dict[str, int],
+) -> tuple[list[list[Placement]], list[list[Placement]]]:
     """
-    Build optimised pick sequences.
+    Absorb REAR placements into FRONT sequences where head capacity allows.
 
-    Rules
-    -----
-    - FRONT and REAR placements are handled in separate passes (mixing rows
-      slows the machine considerably).
-    - Each sequence holds at most MAX_NOZZLES (8) placements.
-    - Within a row pass, placements are ordered by nearest-neighbour PCB tour,
-      then packed into sequences of 8 in that order.
-    - The PCB tour ordering ensures that consecutive sequences are spatially
-      close on the board, minimising head travel between sequences.
+    For each FRONT sequence, rear placements whose nozzle type still has unused
+    head slots in that cycle (used < h_i) are appended directly.  Any rear
+    placements that don't fit are re-grouped into smaller dedicated rear
+    sequences using the same global head config.
     """
-    sequences: list[list[Placement]] = []
+    rear_queue: list[Placement] = [p for seq in rear_seqs for p in seq]
+
+    new_front: list[list[Placement]] = [list(s) for s in front_seqs]
+    for seq in new_front:
+        if not rear_queue:
+            break
+        nozzle_used: dict[str, int] = defaultdict(int)
+        for p in seq:
+            nozzle_used[p.nozzle_type] += 1
+
+        leftover: list[Placement] = []
+        for p in rear_queue:
+            h_i = head_config.get(p.nozzle_type, 1)
+            if nozzle_used[p.nozzle_type] < h_i:
+                seq.append(p)
+                nozzle_used[p.nozzle_type] += 1
+            else:
+                leftover.append(p)
+        rear_queue = leftover
+
+    # Re-group unabsorbed rear placements into dedicated rear cycles
+    new_rear: list[list[Placement]] = []
+    while rear_queue:
+        cycle:       list[Placement] = []
+        nozzle_used: dict[str, int]  = defaultdict(int)
+        leftover:    list[Placement] = []
+        for p in rear_queue:
+            h_i = head_config.get(p.nozzle_type, 1)
+            if nozzle_used[p.nozzle_type] < h_i:
+                cycle.append(p)
+                nozzle_used[p.nozzle_type] += 1
+            else:
+                leftover.append(p)
+        if cycle:
+            new_rear.append(cycle)
+        rear_queue = leftover
+
+    return new_front, new_rear
+
+
+def build_sequences(
+    placements:  list[Placement],
+    head_config: dict[str, int],
+) -> list[list[Placement]]:
+    """
+    Build pick sequences ordered to maximise machine head utilisation.
+
+    The machine accumulates components into a batch (one per physical head) and
+    fires immediately when it would need to reuse a head already loaded in the
+    current batch.  To fill as many heads as possible before each fire,
+    placements are interleaved by nozzle type: each cycle contains h_i
+    placements of nozzle type i (where h_i = heads allocated to that nozzle).
+
+    Within each nozzle type the placements follow a nearest-neighbour spatial
+    tour so PCB head travel is minimised across consecutive cycles.
+
+    FRONT and REAR rows are sequenced separately.  When the REAR pass is sparse
+    (average placements per cycle < n_heads / 2), rear placements are bundled
+    into FRONT cycles instead — saving dedicated rear-rack excursions.
+    """
+    front_seqs: list[list[Placement]] = []
+    rear_seqs:  list[list[Placement]] = []
 
     for row in ('FRONT', 'REAR'):
+        row_slots      = FRONT_SLOTS if row == 'FRONT' else REAR_SLOTS
         row_placements = [p for p in placements
-                          if p.feeder_slot is not None and p.feeder_slot in
-                          (FRONT_SLOTS if row == 'FRONT' else REAR_SLOTS)]
-
+                          if p.feeder_slot is not None and p.feeder_slot in row_slots]
         if not row_placements:
             continue
 
-        ordered = _nearest_neighbor_tour(row_placements)
+        nozzle_groups: dict[str, list[Placement]] = defaultdict(list)
+        for p in row_placements:
+            nozzle_groups[p.nozzle_type or ''].append(p)
 
-        # Chunk into sequences of MAX_NOZZLES
-        for i in range(0, len(ordered), MAX_NOZZLES):
-            seq = ordered[i: i + MAX_NOZZLES]
-            sequences.append(seq)
+        nozzle_order = sorted(nozzle_groups)
+        tours: dict[str, list[Placement]] = {
+            nz: _nearest_neighbor_tour(grp) for nz, grp in nozzle_groups.items()
+        }
+        pointers: dict[str, int] = {nz: 0 for nz in nozzle_order}
 
-    return sequences
+        row_seqs: list[list[Placement]] = []
+        while any(pointers[nz] < len(tours[nz]) for nz in nozzle_order):
+            cycle: list[Placement] = []
+            for nz in nozzle_order:
+                h_i   = head_config.get(nz, 1)
+                ptr   = pointers[nz]
+                chunk = tours[nz][ptr: ptr + h_i]
+                cycle.extend(chunk)
+                pointers[nz] = ptr + len(chunk)
+            if cycle:
+                row_seqs.append(cycle)
+
+        if row == 'FRONT':
+            front_seqs = row_seqs
+        else:
+            rear_seqs = row_seqs
+
+    # Bundle sparse REAR passes into FRONT cycles.
+    # A dedicated rear cycle costs a full rack-trip overhead; if average REAR
+    # cycle size is small (< half the head count) it is cheaper to add one
+    # rear pick to an existing FRONT cycle than to run a dedicated pass.
+    n_heads = sum(head_config.values()) if head_config else MAX_NOZZLES
+    if front_seqs and rear_seqs:
+        rear_total = sum(len(s) for s in rear_seqs)
+        rear_avg   = rear_total / len(rear_seqs)
+        if rear_avg < n_heads / 2:
+            front_seqs, rear_seqs = _bundle_rear_into_front(
+                front_seqs, rear_seqs, head_config,
+            )
+            remaining = sum(len(s) for s in rear_seqs)
+            absorbed  = rear_total - remaining
+            print(f"  Sparse REAR: {absorbed}/{rear_total} placements bundled"
+                  f" into FRONT cycles"
+                  + (f", {remaining} remain as dedicated REAR." if remaining else "."))
+
+    return front_seqs + rear_seqs
 
 
 def simultaneous_pick_groups(seq: list[Placement]) -> list[list[Placement]]:
     """
-    For a single sequence, return the groups that can be picked simultaneously
-    (up to MAX_SIMULTANEOUS components per descend, all in same mod group,
-    same row).
-    Returns a list of sub-groups; placements not fitting any group are singletons.
+    For a single sequence, return the groups that can be picked simultaneously.
+
+    Constraints per group:
+      - Same feeder row (FRONT or REAR)
+      - Feeder slots aligned to the same mod group (physical head spacing)
+      - At most MAX_SIMULTANEOUS components
+      - Each nozzle_type appears at most once (one physical head per nozzle)
     """
     by_mod: dict[int, list[Placement]] = defaultdict(list)
     for p in seq:
         if p.feeder_slot is not None:
             by_mod[_slot_mod_group(p.feeder_slot)].append(p)
 
-    groups: list[list[Placement]] = []
-    assigned = set()
-    # Largest mod groups first
-    for mod in sorted(by_mod, key=lambda m: -len(by_mod[m])):
-        chunk = [p for p in by_mod[mod] if id(p) not in assigned]
-        while chunk:
-            grp = chunk[:MAX_SIMULTANEOUS]
-            groups.append(grp)
-            for p in grp:
-                assigned.add(id(p))
-            chunk = chunk[MAX_SIMULTANEOUS:]
+    groups:   list[list[Placement]] = []
+    assigned: set[int]              = set()
 
-    # Any unassigned (shouldn't happen, but safety net)
+    for mod in sorted(by_mod, key=lambda m: -len(by_mod[m])):
+        remaining = [p for p in by_mod[mod] if id(p) not in assigned]
+        while remaining:
+            grp:          list[Placement] = []
+            seen_nozzles: set[str]        = set()
+            leftover:     list[Placement] = []
+            for p in remaining:
+                if len(grp) < MAX_SIMULTANEOUS and p.nozzle_type not in seen_nozzles:
+                    grp.append(p)
+                    seen_nozzles.add(p.nozzle_type)
+                else:
+                    leftover.append(p)
+            if grp:
+                groups.append(grp)
+                for p in grp:
+                    assigned.add(id(p))
+            remaining = leftover
+
     for p in seq:
         if id(p) not in assigned:
             groups.append([p])
     return groups
+
+
+# ─── Head configuration optimisation ─────────────────────────────────────────
+
+def _greedy_head_alloc(counts: dict[str, int], n_heads: int) -> dict[str, int]:
+    """
+    Core greedy allocation: given nozzle-type placement counts and a head budget,
+    minimise max_i(ceil(P_i / h_i)).  Raises ValueError if more nozzle types
+    than heads.
+    """
+    active = sorted(counts)
+    k      = len(active)
+    if k == 0:
+        return {}
+    if k > n_heads:
+        raise ValueError(
+            f"{k} distinct nozzle types but only {n_heads} heads available. "
+            f"Increase --heads or reduce nozzle types on this machine."
+        )
+    h: dict[str, int] = {nz: 1 for nz in active}
+    for _ in range(n_heads - k):
+        worst = max(active, key=lambda nz: counts[nz] / h[nz])
+        h[worst] += 1
+    return h
+
+
+def optimize_head_config(
+    components: list[ComponentType],
+    n_heads:    int,
+) -> dict[str, int]:
+    """Optimise head allocation for a list of ComponentType objects."""
+    counts: dict[str, int] = defaultdict(int)
+    for comp in components:
+        if comp.nozzle_type:
+            counts[comp.nozzle_type] += comp.count
+    return _greedy_head_alloc(dict(counts), n_heads)
+
+
+def write_nozzle_config_csv(
+    head_config: dict[str, int],
+    components:  list[ComponentType],
+    path:        Path,
+) -> None:
+    """
+    Write the operator nozzle-loading sheet.
+
+    Header comments summarise placement counts, heads assigned, and estimated
+    cycles per nozzle type.  The body lists one row per physical head so the
+    operator can load nozzles in order.
+    """
+    counts: dict[str, int] = defaultdict(int)
+    for comp in components:
+        if comp.nozzle_type:
+            counts[comp.nozzle_type] += comp.count
+
+    est_cycles_per = {
+        nz: math.ceil(counts[nz] / h)
+        for nz, h in head_config.items()
+        if counts.get(nz, 0) > 0
+    }
+    est_cycles       = max(est_cycles_per.values()) if est_cycles_per else 0
+    total_placements = sum(counts[nz] for nz in head_config if counts.get(nz, 0) > 0)
+    total_heads      = sum(head_config.values())
+    utilisation      = (
+        total_placements / (total_heads * est_cycles) * 100
+        if est_cycles > 0 else 0.0
+    )
+
+    with open(path, 'w', newline='', encoding='utf-8') as f:
+        f.write('# Optimised nozzle head configuration\n')
+        f.write('# nozzle_type,heads_assigned,placements,est_cycles\n')
+        for nz in sorted(head_config):
+            h   = head_config[nz]
+            cnt = counts.get(nz, 0)
+            cyc = est_cycles_per.get(nz, 0)
+            f.write(f'# {nz},{h},{cnt},{cyc}\n')
+        f.write(
+            f'# Estimated pick cycles: {est_cycles}'
+            f'  (head utilisation: {utilisation:.0f}%)\n'
+        )
+        f.write('head,nozzle_type\n')
+        head_num = 1
+        for nz in sorted(head_config):
+            for _ in range(head_config[nz]):
+                f.write(f'{head_num},{nz}\n')
+                head_num += 1
 
 
 # ─── Capacity reporting ───────────────────────────────────────────────────────
@@ -973,22 +1296,59 @@ def write_job_file(sequences: list[list[Placement]], path: Path) -> None:
 
 # ─── Summary ──────────────────────────────────────────────────────────────────
 
-def print_summary(sequences: list[list[Placement]]) -> None:
-    total = sum(len(s) for s in sequences)
-    total_descends = 0
-    for seq in sequences:
-        total_descends += len(simultaneous_pick_groups(seq))
+def print_summary(
+    sequences:   list[list[Placement]],
+    head_config: dict[str, int],
+    timing:      TimingConfig,
+) -> None:
+    total       = sum(len(s) for s in sequences)
+    n_heads     = sum(head_config.values()) if head_config else MAX_NOZZLES
+    est_cycles  = len(sequences)
 
-    print(f"\n  Sequences         : {len(sequences)}")
+    # Ideal minimum: nozzle-constrained per-row bottleneck
+    nozzle_front: dict[str, int] = defaultdict(int)
+    nozzle_rear:  dict[str, int] = defaultdict(int)
+    for seq in sequences:
+        bucket = nozzle_front if (seq and seq[0].feeder_slot in FRONT_SLOTS) else nozzle_rear
+        for p in seq:
+            bucket[p.nozzle_type or ''] += 1
+    front_ideal = max(
+        (math.ceil(cnt / head_config.get(nz, 1)) for nz, cnt in nozzle_front.items()),
+        default=0,
+    )
+    rear_ideal  = max(
+        (math.ceil(cnt / head_config.get(nz, 1)) for nz, cnt in nozzle_rear.items()),
+        default=0,
+    )
+    ideal_min   = front_ideal + rear_ideal
+    utilisation = total / (n_heads * ideal_min) * 100 if ideal_min > 0 else 0.0
+
+    total_descends = sum(len(simultaneous_pick_groups(seq)) for seq in sequences)
+    max_sim = max(
+        (len(grp) for seq in sequences for grp in simultaneous_pick_groups(seq)),
+        default=0,
+    )
+
+    # Estimated board time: interpolated per component, plus min/max bounds
+    def _fmt(secs: float) -> str:
+        m, s = divmod(int(secs), 60)
+        return f"{m}m {s:02d}s" if m else f"{s}s"
+
+    placed = [p for seq in sequences for p in seq if p.feeder_slot is not None]
+    est_time = sum(_placement_time(p.feeder_slot, timing) for p in placed)
+    min_time = sum(timing.front_time_min if p.feeder_slot in FRONT_SLOTS
+                   else timing.rear_time_min for p in placed)
+    max_time = sum(timing.front_time_max if p.feeder_slot in FRONT_SLOTS
+                   else timing.rear_time_max for p in placed)
+
+    print(f"\n  Pick cycles       : {est_cycles}"
+          f"  (ideal minimum: {ideal_min})")
     print(f"  Total placements  : {total}")
-    print(f"  Pick descends     : {total_descends}  "
-          f"(ideal minimum: {math.ceil(total / MAX_SIMULTANEOUS)})")
-
-    max_sim = 0
-    for seq in sequences:
-        for grp in simultaneous_pick_groups(seq):
-            max_sim = max(max_sim, len(grp))
+    print(f"  Head utilisation  : {utilisation:.0f}%")
+    print(f"  Pick descends     : {total_descends}")
     print(f"  Best simultaneous : {max_sim} components per descend")
+    print(f"  Est. board time   : {_fmt(est_time)}"
+          f"  (range {_fmt(min_time)} – {_fmt(max_time)})")
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -1018,6 +1378,14 @@ def main() -> None:
                         help='Include DNM/DNP components instead of skipping them')
     parser.add_argument('--machines', type=int, default=1, metavar='N',
                         help='Split job across N machines (default: 1)')
+    parser.add_argument('--timing-config', default='timing_config.csv',
+                        help='Timing calibration CSV (default: timing_config.csv)')
+    parser.add_argument('--heads', type=int, default=8, metavar='N',
+                        help='Number of physical PnP heads per machine (default: 8)')
+    parser.add_argument('--machine1-skew', type=float, default=0.0, metavar='PCT',
+                        help='Allow machine 1 to carry up to PCT%% more placements '
+                             'than its equal share, biasing small-nozzle (#500–#503) '
+                             'components to machine 1 (default: 0)')
     args = parser.parse_args()
 
     bom_path          = Path(args.bom)
@@ -1030,6 +1398,15 @@ def main() -> None:
     components_path   = output_dir / f"{job_prefix}_components.csv"
 
     # ── Always load the BOM first (needed for X/Y/A in both phases) ───────────
+    timing_path = Path(args.timing_config)
+    timing = load_timing_config(timing_path)
+    if timing_path.exists():
+        print(f"Loading timing config : {timing_path}")
+    else:
+        print(f"Timing config        : {timing_path} not found — using defaults"
+              f" ({timing.front_time_min}–{timing.front_time_max}s FRONT,"
+              f" {timing.rear_time_min}–{timing.rear_time_max}s REAR)")
+
     print(f"Loading feeder table : {feeder_table_path}")
     feeder_specs = load_feeder_table(feeder_table_path)
     print(f"  {len(feeder_specs)} feeder widths: {sorted(feeder_specs)}")
@@ -1086,6 +1463,13 @@ def main() -> None:
     # Write (or overwrite) the component CSV
     write_components_csv(components, components_path)
 
+    # Promote any MANUAL entries that aren't covered by an existing rule
+    if pkg_rules_path.exists():
+        n_learned = update_package_rules_from_manual(components, pkg_rules, pkg_rules_path)
+        if n_learned:
+            print(f"  Learned {n_learned} new package rule(s) from manual entries"
+                  f" → {pkg_rules_path}")
+
     # Report match results
     ok       = [c for c in components if _component_status(c) == 'OK']
     incomplete = [c for c in components if _component_status(c) == 'INCOMPLETE']
@@ -1129,7 +1513,9 @@ def main() -> None:
     components = group_components(placements)
 
     # Distribute component types across machines
-    partitions = split_components_across_machines(components, n_machines)
+    partitions = split_components_across_machines(
+        components, n_machines, machine1_skew=args.machine1_skew
+    )
 
     output_files: list[Path] = [components_path]
 
@@ -1138,9 +1524,14 @@ def main() -> None:
         machine_placements = [p for c in machine_components for p in c.placements]
 
         if n_machines > 1:
-            total_p = sum(c.count for c in machine_components)
+            total_p  = sum(c.count for c in machine_components)
+            small_p  = sum(c.count for c in machine_components
+                           if c.nozzle_type in _SMALL_NOZZLES)
+            large_p  = total_p - small_p
             print(f"\n── Machine {machine_idx}  ({total_p} placements,"
                   f" {len(machine_components)} component types) ──")
+            print(f"   Nozzle mix: small (#500–#503) {small_p}"
+                  f"  /  large (#504+) {large_p}")
 
         print("\nSlot capacity:")
         capacity_report(machine_components, feeder_specs)
@@ -1156,17 +1547,28 @@ def main() -> None:
         if args.multi_reel:
             print(f"  Multi-reel ON (threshold: {args.multi_reel_threshold} placements/reel)")
 
-        print("\nBuilding pick sequences...")
-        sequences = build_sequences(machine_placements)
-        print_summary(sequences)
+        print("\nOptimising nozzle head configuration...")
+        try:
+            head_config = optimize_head_config(machine_components, n_heads=args.heads)
+        except ValueError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            sys.exit(1)
+        for nz in sorted(head_config):
+            print(f"  {head_config[nz]} × {nz}")
 
-        feeder_csv = output_dir / f"{job_prefix}{machine_label}_feeders.csv"
-        job_txt    = output_dir / f"{job_prefix}{machine_label}_sequence.txt"
+        print("\nBuilding pick sequences...")
+        sequences = build_sequences(machine_placements, head_config)
+        print_summary(sequences, head_config, timing)
+
+        feeder_csv  = output_dir / f"{job_prefix}{machine_label}_feeders.csv"
+        job_txt     = output_dir / f"{job_prefix}{machine_label}_sequence.txt"
+        nozzle_csv  = output_dir / f"{job_prefix}{machine_label}_nozzle_config.csv"
 
         write_feeder_csv(assignments, feeder_csv)
         write_job_file(sequences, job_txt)
+        write_nozzle_config_csv(head_config, machine_components, nozzle_csv)
 
-        output_files.extend([feeder_csv, job_txt])
+        output_files.extend([feeder_csv, job_txt, nozzle_csv])
 
     print(f"\nOutputs written:")
     for out_path in output_files:

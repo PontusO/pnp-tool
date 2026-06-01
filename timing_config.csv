@@ -1,0 +1,5 @@
+parameter,value,description
+front_time_min,0.5,Fastest front-row placement time in seconds (feeder at machine centre)
+front_time_max,0.7,Slowest front-row placement time in seconds (feeder at rack edge)
+rear_time_min,1.0,Fastest rear-row placement time in seconds (feeder at machine centre)
+rear_time_max,1.2,Slowest rear-row placement time in seconds (feeder at rack edge)

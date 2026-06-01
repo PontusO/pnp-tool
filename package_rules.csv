@@ -10,15 +10,15 @@ pattern,match_type,feeder_width,feeder_row,nozzle_type,notes
 # ─────────────────────────────────────────────────────────────────────────────
 #
 # ── Modules / large RF & wireless (REAR camera, wide feeder) ─────────────────
-MS88SF,prefix,16,REAR,N15,Minew BLE module
-XCVR_,prefix,16,REAR,N15,RF transceiver module
-WIRL-,prefix,16,REAR,N15,Wirepas/wireless module
-RFM9,prefix,16,REAR,N15,HopeRF RFM9x LoRa module
-ESP32,prefix,16,REAR,N15,ESP32 module
+MS88SF,prefix,16,REAR,,Minew BLE module
+XCVR_,prefix,16,REAR,,RF transceiver module
+WIRL-,prefix,16,REAR,,Wirepas/wireless module
+RFM9,prefix,16,REAR,,HopeRF RFM9x LoRa module
+ESP32,prefix,16,REAR,,ESP32 module
 #
 # ── BGA / LGA (REAR camera) ───────────────────────────────────────────────────
-BGA,contains,16,REAR,N15,Ball Grid Array
-LGA,contains,16,REAR,N15,Land Grid Array (large)
+BGA,contains,16,REAR,,Ball Grid Array
+LGA,contains,16,REAR,,Land Grid Array (large)
 #
 # ── Connectors — size varies widely; set feeder_width only ───────────────────
 USB,prefix,16,REAR,,USB connectors
@@ -30,125 +30,128 @@ U.FL,prefix,8,REAR,,U.FL RF connector
 U.FLS,prefix,8,REAR,,U.FLS RF connector (surface mount)
 #
 # ── QFP / LQFP / TQFP (FRONT, wider feeder for larger bodies) ────────────────
-LQFP,prefix,12,FRONT,N08,Low-profile QFP
-TQFP,prefix,12,FRONT,N08,Thin QFP
-QFP,prefix,12,FRONT,N08,Quad Flat Package (generic)
+LQFP,prefix,12,FRONT,#505,Low-profile QFP
+TQFP,prefix,12,FRONT,#505,Thin QFP
+QFP,prefix,12,FRONT,#505,Quad Flat Package (generic)
 #
 # ── SOIC / SOP (FRONT) ───────────────────────────────────────────────────────
-SOIC8,prefix,8,FRONT,N08,SOIC-8
-SOIC16,prefix,12,FRONT,N08,SOIC-16
-SOIC,prefix,8,FRONT,N08,SOIC generic
-SOP,prefix,8,FRONT,N08,SOP generic
-TSSOP,prefix,8,FRONT,N08,TSSOP
-MSOP,prefix,8,FRONT,N08,MSOP
+SOIC8,prefix,8,FRONT,#504,SOIC-8
+SOIC16,prefix,12,FRONT,#505,SOIC-16
+SOIC,prefix,8,FRONT,#504,SOIC generic
+SOP,prefix,8,FRONT,#504,SOP generic
+TSSOP,prefix,8,FRONT,#505,TSSOP
+MSOP,prefix,8,FRONT,#504,MSOP
 #
 # ── QFN / DFN / LGA small (FRONT) ────────────────────────────────────────────
-QFN50P200,prefix,8,FRONT,N08,2x2 mm QFN
-QFN50P300,prefix,8,FRONT,N08,3x3 mm QFN
-QFN50P400,prefix,8,FRONT,N08,4x4 mm QFN
-QFN50P500,prefix,8,FRONT,N08,5x5 mm QFN
-QFN50P600,prefix,8,FRONT,N08,6x6 mm QFN
-QFN50P700,prefix,8,FRONT,N08,7x7 mm QFN (largest FRONT)
-QFN,prefix,12,FRONT,N08,QFN generic (larger sizes)
-DFN1010,prefix,8,FRONT,N08,1x1 mm DFN
-DFN,prefix,8,FRONT,N08,DFN generic
-TDFN,prefix,8,FRONT,N08,Thin DFN
-DHVQFN,prefix,8,FRONT,N08,DHVQFN (NXP)
-HVQFN,prefix,8,FRONT,N08,HVQFN (NXP)
-WQFN,prefix,8,FRONT,N08,WQFN
-UQFN,prefix,8,FRONT,N08,UQFN
+QFN50P200,prefix,8,FRONT,#504,2x2 mm QFN
+QFN50P300,prefix,8,FRONT,#504,3x3 mm QFN
+QFN50P400,prefix,8,FRONT,#505,4x4 mm QFN
+QFN50P500,prefix,8,FRONT,#505,5x5 mm QFN
+QFN50P600,prefix,8,FRONT,#505,6x6 mm QFN
+QFN50P700,prefix,8,FRONT,#505,7x7 mm QFN (largest FRONT)
+QFN,prefix,12,FRONT,#505,QFN generic (larger sizes)
+DFN1010,prefix,8,FRONT,#504,1x1 mm DFN
+DFN,prefix,8,FRONT,#504,DFN generic
+TDFN,prefix,8,FRONT,#504,Thin DFN
+DHVQFN,prefix,8,FRONT,#504,DHVQFN (NXP)
+HVQFN,prefix,8,FRONT,#504,HVQFN (NXP)
+WQFN,prefix,8,FRONT,#504,WQFN
+UQFN,prefix,8,FRONT,#504,UQFN
 #
 # ── SOT / SC (transistors, small ICs) ────────────────────────────────────────
-SOT23-6,prefix,8,FRONT,N045,SOT-23-6
-SOT23-5,prefix,8,FRONT,N045,SOT-23-5
-SOT23-3,prefix,8,FRONT,N045,SOT-23-3
-SOT23,prefix,8,FRONT,N045,SOT-23 (generic)
-SUPER-SOT3,exact,8,FRONT,N045,Micro Commercial SUPER-SOT-3
-SOT363,prefix,8,FRONT,N045,SOT-363 (6 pin)
-SOT323,prefix,8,FRONT,N045,SOT-323
-SOT89,prefix,8,FRONT,N08,SOT-89 (medium power)
-SOT223,prefix,12,FRONT,N08,SOT-223
-SC70,prefix,8,FRONT,N045,SC-70
-SC88,prefix,8,FRONT,N045,SC-88
+SOT23-6,prefix,8,FRONT,#504,SOT-23-6
+SOT23-5,prefix,8,FRONT,#504,SOT-23-5
+SOT23-3,prefix,8,FRONT,#504,SOT-23-3
+SOT23,prefix,8,FRONT,#504,SOT-23 (generic)
+SUPER-SOT3,exact,8,FRONT,#504,Micro Commercial SUPER-SOT-3
+SOT363,prefix,8,FRONT,#504,SOT-363 (6 pin)
+SOT323,prefix,8,FRONT,#504,SOT-323
+SOT89,prefix,8,FRONT,#504,SOT-89 (medium power)
+SOT223,prefix,12,FRONT,#505,SOT-223
+SC70,prefix,8,FRONT,#504,SC-70
+SC88,prefix,8,FRONT,#504,SC-88
 #
 # ── Diodes ───────────────────────────────────────────────────────────────────
-SOD-523,prefix,8,FRONT,N045,SOD-523
-SOD-323,prefix,8,FRONT,N045,SOD-323
-SOD-123,prefix,8,FRONT,N045,SOD-123
-SOD-128,prefix,8,FRONT,N08,SOD-128
-DO-214AA,prefix,12,FRONT,N08,DO-214AA (SMA)
-DO-214AB,prefix,16,FRONT,N08,DO-214AB (SMB)
-DO-214AC,prefix,16,FRONT,N08,DO-214AC (SMC)
-DIOC,prefix,8,FRONT,N045,IPC diode (generic)
+SOD-523,prefix,8,FRONT,#504,SOD-523
+SOD-323,prefix,8,FRONT,#504,SOD-323
+SOD-123,prefix,8,FRONT,#504,SOD-123
+SOD-128,prefix,8,FRONT,#504,SOD-128
+DO-214AA,prefix,12,FRONT,#505,DO-214AA (SMA)
+DO-214AB,prefix,16,FRONT,#505,DO-214AB (SMB)
+DO-214AC,prefix,16,FRONT,#505,DO-214AC (SMC)
+DIOC,prefix,8,FRONT,#504,IPC diode (generic)
 #
 # ── Capacitors — IPC-7351 names (CAPCbbbbXhh) ────────────────────────────────
-CAPC0402,prefix,8,FRONT,N045,0201 cap (IPC)
-CAPC0603,prefix,8,FRONT,N045,0201 cap (IPC alt)
-CAPC1005,prefix,8,FRONT,N045,0402 cap (IPC)
-CAPC1608,prefix,8,FRONT,N045,0603 cap (IPC)
-CAPC2012,prefix,8,FRONT,N08,0805 cap (IPC)
-CAPC3216,prefix,12,FRONT,N08,1206 cap (IPC)
-CAPC3225,prefix,12,FRONT,N08,1210 cap (IPC)
-CAPC4532,prefix,16,FRONT,N08,1812 cap (IPC)
-CAPC,prefix,8,FRONT,N08,IPC capacitor (generic fallback)
+CAPC0402,prefix,8,FRONT,#500,0201 cap (IPC)
+CAPC0603,prefix,8,FRONT,#500,0201 cap (IPC alt)
+CAPC1005,prefix,8,FRONT,#501,0402 cap (IPC)
+CAPC1608,prefix,8,FRONT,#502,0603 cap (IPC)
+CAPC2012,prefix,8,FRONT,#503,0805 cap (IPC)
+CAPC3216,prefix,12,FRONT,#503,1206 cap (IPC)
+CAPC3225,prefix,12,FRONT,#503,1210 cap (IPC)
+CAPC4532,prefix,16,FRONT,#503,1812 cap (IPC)
+CAPC,prefix,8,FRONT,#503,IPC capacitor (generic fallback)
 #
 # ── Capacitors — shorthand names ─────────────────────────────────────────────
-C0201,prefix,8,FRONT,N045,0201 capacitor
-C0402,prefix,8,FRONT,N045,0402 capacitor
-C0603,prefix,8,FRONT,N08,0603 capacitor
-C0805,prefix,8,FRONT,N08,0805 capacitor
-C1206,prefix,12,FRONT,N08,1206 capacitor
-C1210,prefix,12,FRONT,N08,1210 capacitor
-C1812,prefix,16,FRONT,N08,1812 capacitor
-C2220,prefix,16,FRONT,N08,2220 capacitor
+C0201,prefix,8,FRONT,#500,0201 capacitor
+C0402,prefix,8,FRONT,#501,0402 capacitor
+C0603,prefix,8,FRONT,#502,0603 capacitor
+C0805,prefix,8,FRONT,#503,0805 capacitor
+C1206,prefix,12,FRONT,#503,1206 capacitor
+C1210,prefix,12,FRONT,#503,1210 capacitor
+C1812,prefix,16,FRONT,#503,1812 capacitor
+C2220,prefix,16,FRONT,#503,2220 capacitor
 #
 # ── Resistors — IPC-7351 names (RESCbbbbXhh) ─────────────────────────────────
-RESC0603,prefix,8,FRONT,N045,0201 resistor (IPC)
-RESC1005,prefix,8,FRONT,N045,0402 resistor (IPC)
-RESC1608,prefix,8,FRONT,N08,0603 resistor (IPC)
-RESC2012,prefix,8,FRONT,N08,0805 resistor (IPC)
-RESC3216,prefix,12,FRONT,N08,1206 resistor (IPC)
-RESC3225,prefix,12,FRONT,N08,1210 resistor (IPC)
-RESC,prefix,8,FRONT,N08,IPC resistor (generic fallback)
+RESC0603,prefix,8,FRONT,#500,0201 resistor (IPC)
+RESC1005,prefix,8,FRONT,#501,0402 resistor (IPC)
+RESC1608,prefix,8,FRONT,#502,0603 resistor (IPC)
+RESC2012,prefix,8,FRONT,#503,0805 resistor (IPC)
+RESC3216,prefix,12,FRONT,#503,1206 resistor (IPC)
+RESC3225,prefix,12,FRONT,#503,1210 resistor (IPC)
+RESC,prefix,8,FRONT,#503,IPC resistor (generic fallback)
 #
 # ── Resistors — shorthand names ──────────────────────────────────────────────
-R0201,prefix,8,FRONT,N045,0201 resistor
-R0402,prefix,8,FRONT,N045,0402 resistor
-R0603,prefix,8,FRONT,N08,0603 resistor
-R0805,prefix,8,FRONT,N08,0805 resistor
-R1206,prefix,12,FRONT,N08,1206 resistor
-R1210,prefix,12,FRONT,N08,1210 resistor
+R0201,prefix,8,FRONT,#500,0201 resistor
+R0402,prefix,8,FRONT,#501,0402 resistor
+R0603,prefix,8,FRONT,#502,0603 resistor
+R0805,prefix,8,FRONT,#503,0805 resistor
+R1206,prefix,12,FRONT,#503,1206 resistor
+R1210,prefix,12,FRONT,#503,1210 resistor
 #
 # ── Inductors — IPC-7351 names ────────────────────────────────────────────────
-INDC1005,prefix,8,FRONT,N045,0402 inductor (IPC)
-INDC1608,prefix,8,FRONT,N08,0603 inductor (IPC)
-INDC2016,prefix,8,FRONT,N08,0806 inductor (IPC)
-INDC2520,prefix,12,FRONT,N08,1008 inductor (IPC)
-INDC3225,prefix,12,FRONT,N08,1210 inductor (IPC)
-INDC4532,prefix,16,FRONT,N08,1812 inductor (IPC)
-INDC,prefix,8,FRONT,N08,IPC inductor (generic fallback)
+INDC1005,prefix,8,FRONT,#501,0402 inductor (IPC)
+INDC1608,prefix,8,FRONT,#502,0603 inductor (IPC)
+INDC2016,prefix,8,FRONT,#503,0806 inductor (IPC)
+INDC2520,prefix,12,FRONT,#503,1008 inductor (IPC)
+INDC3225,prefix,12,FRONT,#503,1210 inductor (IPC)
+INDC4532,prefix,16,FRONT,#503,1812 inductor (IPC)
+INDC,prefix,8,FRONT,#503,IPC inductor (generic fallback)
 #
 # ── Inductors — shorthand names ──────────────────────────────────────────────
-L0201,prefix,8,FRONT,N045,0201 inductor
-L0402,prefix,8,FRONT,N045,0402 inductor
-L0603,prefix,8,FRONT,N08,0603 inductor
-L0805,prefix,8,FRONT,N08,0805 inductor
-L1206,prefix,12,FRONT,N08,1206 inductor
-L1210,prefix,12,FRONT,N08,1210 inductor
+L0201,prefix,8,FRONT,#500,0201 inductor
+L0402,prefix,8,FRONT,#501,0402 inductor
+L0603,prefix,8,FRONT,#502,0603 inductor
+L0805,prefix,8,FRONT,#503,0805 inductor
+L1206,prefix,12,FRONT,#503,1206 inductor
+L1210,prefix,12,FRONT,#503,1210 inductor
 #
 # ── LEDs ─────────────────────────────────────────────────────────────────────
-CHIPLED_0402,prefix,8,FRONT,N045,0402 LED
-CHIPLED_0603,prefix,8,FRONT,N045,0603 LED
-CHIPLED_0805,prefix,8,FRONT,N08,0805 LED
-CHIPLED,prefix,8,FRONT,N045,LED (generic)
-LED,prefix,8,FRONT,N045,LED (generic shorthand)
+CHIPLED_0402,prefix,8,FRONT,#501,0402 LED
+CHIPLED_0603,prefix,8,FRONT,#502,0603 LED
+CHIPLED_0805,prefix,8,FRONT,#503,0805 LED
+CHIPLED,prefix,8,FRONT,#502,LED (generic)
+LED,prefix,8,FRONT,#502,LED (generic shorthand)
 #
 # ── Crystals / oscillators ────────────────────────────────────────────────────
-XTAL,prefix,8,FRONT,N08,Crystal
-OSC,prefix,8,FRONT,N08,Oscillator
-ABM,prefix,8,FRONT,N08,Abracon crystal series
+XTAL,prefix,8,FRONT,#504,Crystal
+OSC,prefix,8,FRONT,#504,Oscillator
+ABM,prefix,8,FRONT,#504,Abracon crystal series
 #
 # ── Switches / buttons ────────────────────────────────────────────────────────
-KMR,prefix,8,FRONT,N08,CK KMR tactile switch
-PTS,prefix,8,FRONT,N08,CK PTS tactile switch
-TACT,contains,8,FRONT,N08,Tactile switch (generic)
+KMR,prefix,8,FRONT,#504,CK KMR tactile switch
+PTS,prefix,8,FRONT,#504,CK PTS tactile switch
+TACT,contains,8,FRONT,#504,Tactile switch (generic)
+#
+# Auto-learned from manual component entries
+SUP_TPS3831L30DQNR,exact,8,FRONT,#505,auto-learned
