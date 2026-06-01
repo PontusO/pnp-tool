@@ -1,3 +1,10 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Generated job outputs
+*_components.csv
+*_feeders.csv
+*_sequence.txt
+*_nozzle_config.csv
+*_report.pdf

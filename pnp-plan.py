@@ -463,6 +463,9 @@ def main() -> None:
     parser.add_argument('--timing-config',           default='timing_config.csv')
     parser.add_argument('--heads',       type=int,   default=8,   metavar='N')
     parser.add_argument('--machine1-skew', type=float, default=0.0, metavar='PCT')
+    parser.add_argument('--report', action='store_true',
+                        help='Generate a PDF documentation report '
+                             '(<prefix>_report.pdf) with all statistics and tables')
     args = parser.parse_args()
 
     bom_path          = Path(args.bom)
@@ -573,6 +576,7 @@ def main() -> None:
     )
 
     output_files: list[Path] = [components_path]
+    report_machines: list[dict] = []
 
     for machine_idx, machine_components in enumerate(partitions, start=1):
         machine_label      = f"_machine{machine_idx}" if n_machines > 1 else ""
@@ -622,6 +626,29 @@ def main() -> None:
         write_nozzle_config_csv(head_config, machine_components, nozzle_csv)
 
         output_files.extend([feeder_csv, job_txt, nozzle_csv])
+
+        if args.report:
+            report_machines.append({
+                'label':        f"Machine {machine_idx}" if n_machines > 1 else "",
+                'stats':        opt.cycle_stats(sequences, head_config),
+                'board_time':   opt.board_time_estimate(sequences),
+                'head_config':  head_config,
+                'feeders_csv':  feeder_csv,
+                'sequence_txt': job_txt,
+                'nozzle_csv':   nozzle_csv,
+            })
+
+    if args.report:
+        import report as report_mod
+        report_pdf = output_dir / f"{job_prefix}_report.pdf"
+        report_mod.write_pdf_report(
+            output_path=report_pdf,
+            job_name=job_prefix,
+            machines=report_machines,
+            components_csv=components_path,
+            n_heads=args.heads,
+        )
+        output_files.append(report_pdf)
 
     print(f"\nOutputs written:")
     for out_path in output_files:
